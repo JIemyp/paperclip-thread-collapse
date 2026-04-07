@@ -1,0 +1,274 @@
+diff --git a/ui/src/components/CommentThread.tsx b/ui/src/components/CommentThread.tsx
+index b0b5c618..07be4f25 100644
+--- a/ui/src/components/CommentThread.tsx
++++ b/ui/src/components/CommentThread.tsx
+@@ -1,4 +1,4 @@
+-import { memo, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
++import { memo, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+ import { Link, useLocation } from "react-router-dom";
+ import type {
+   Agent,
+@@ -8,7 +8,7 @@ import type {
+   IssueComment,
+ } from "@paperclipai/shared";
+ import { Button } from "@/components/ui/button";
+-import { ArrowRight, Check, Copy, Paperclip } from "lucide-react";
++import { ArrowRight, Check, ChevronDown, Copy, Paperclip } from "lucide-react";
+ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+ import { Identity } from "./Identity";
+ import { InlineEntitySelector, type InlineEntityOption } from "./InlineEntitySelector";
+@@ -440,6 +440,65 @@ function TimelineEventCard({
+   );
+ }
+ 
++function stripMarkdown(text: string): string {
++  return text
++    .replace(/```[\s\S]*?```/g, "[code]")
++    .replace(/`[^`]+`/g, (m) => m.slice(1, -1))
++    .replace(/!\[.*?\]\(.*?\)/g, "[image]")
++    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
++    .replace(/^#+\s+/gm, "")
++    .replace(/\*\*(.+?)\*\*/g, "$1")
++    .replace(/\*(.+?)\*/g, "$1")
++    .replace(/_{1,2}(.+?)_{1,2}/g, "$1")
++    .replace(/~~(.+?)~~/g, "$1")
++    .replace(/^[-*>]\s+/gm, "")
++    .replace(/\n+/g, " ")
++    .trim();
++}
++
++function CollapsedCommentCard({
++  comment,
++  agentMap,
++  onClick,
++}: {
++  comment: CommentWithRunMeta;
++  agentMap?: Map<string, Agent>;
++  onClick: () => void;
++}) {
++  const authorName = comment.authorAgentId
++    ? (agentMap?.get(comment.authorAgentId)?.name ?? comment.authorAgentId.slice(0, 8))
++    : "You";
++
++  const preview = stripMarkdown(comment.body ?? "");
++  const previewText = preview.length > 120 ? preview.slice(0, 120) + "…" : preview;
++
++  return (
++    <button
++      type="button"
++      onClick={onClick}
++      className="flex w-full items-center gap-2.5 rounded-md border border-border/50 bg-muted/30 px-3 py-2 text-left transition-colors hover:bg-muted/60 hover:border-border"
++    >
++      <Avatar size="sm" className="shrink-0">
++        {comment.authorAgentId ? (
++          <AvatarFallback>{initialsForName(authorName)}</AvatarFallback>
++        ) : (
++          <AvatarFallback>{initialsForName(authorName)}</AvatarFallback>
++        )}
++      </Avatar>
++      <div className="min-w-0 flex-1">
++        <div className="flex items-center gap-2">
++          <span className="text-sm font-medium text-foreground">{authorName}</span>
++          <span className="text-xs text-muted-foreground">{timeAgo(comment.createdAt)}</span>
++        </div>
++        {previewText && (
++          <p className="truncate text-xs text-muted-foreground">{previewText}</p>
++        )}
++      </div>
++      <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
++    </button>
++  );
++}
++
+ const TimelineList = memo(function TimelineList({
+   timeline,
+   agentMap,
+@@ -469,13 +528,39 @@ const TimelineList = memo(function TimelineList({
+   votingTargetId?: string | null;
+   highlightCommentId?: string | null;
+ }) {
++  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
++
++  const toggleExpand = useCallback((id: string) => {
++    setExpandedIds((prev) => {
++      const next = new Set(prev);
++      if (next.has(id)) next.delete(id);
++      else next.add(id);
++      return next;
++    });
++  }, []);
++
++  // When highlightCommentId changes, auto-expand it
++  useEffect(() => {
++    if (highlightCommentId) {
++      setExpandedIds((prev) => new Set(prev).add(highlightCommentId));
++    }
++  }, [highlightCommentId]);
++
+   if (timeline.length === 0) {
+     return <p className="text-sm text-muted-foreground">No timeline entries yet.</p>;
+   }
+ 
++  // Indices of first and last comment items (not events/runs)
++  const commentIndices = timeline.reduce<number[]>((acc, item, i) => {
++    if (item.kind === "comment") acc.push(i);
++    return acc;
++  }, []);
++  const firstCommentIdx = commentIndices[0] ?? -1;
++  const lastCommentIdx = commentIndices[commentIndices.length - 1] ?? -1;
++
+   return (
+     <div className="space-y-3">
+-      {timeline.map((item) => {
++      {timeline.map((item, index) => {
+         if (item.kind === "event") {
+           return (
+             <TimelineEventCard
+@@ -524,6 +609,19 @@ const TimelineList = memo(function TimelineList({
+         }
+ 
+         const comment = item.comment;
++        const isExpanded = index === lastCommentIdx || expandedIds.has(comment.id);
++
++        if (!isExpanded) {
++          return (
++            <CollapsedCommentCard
++              key={comment.id}
++              comment={comment}
++              agentMap={agentMap}
++              onClick={() => toggleExpand(comment.id)}
++            />
++          );
++        }
++
+         return (
+           <CommentCard
+             key={comment.id}
+@@ -813,7 +911,7 @@ export function CommentThread({
+               <input
+                 ref={attachInputRef}
+                 type="file"
+-                accept="image/png,image/jpeg,image/webp,image/gif"
++                accept="image/png,image/jpeg,image/webp,image/gif,text/plain,text/markdown,application/json,text/csv,text/html,.md,.markdown"
+                 className="hidden"
+                 onChange={handleAttachFile}
+               />
+@@ -822,7 +920,7 @@ export function CommentThread({
+                 size="icon-sm"
+                 onClick={() => attachInputRef.current?.click()}
+                 disabled={attaching}
+-                title="Attach image"
++                title="Attach file"
+               >
+                 <Paperclip className="h-4 w-4" />
+               </Button>
+--- /tmp/IssueDocumentsSection-old.tsx	2026-04-07 01:55:33.258727764 +0000
++++ /tmp/IssueDocumentsSection-new.tsx	2026-04-07 01:55:25.076677207 +0000
+@@ -135,6 +135,7 @@
+   imageUploadHandler,
+   onVote,
+   extraActions,
++  collapsePlan = false,
+ }: {
+   issue: Issue;
+   canDeleteDocuments: boolean;
+@@ -149,6 +150,7 @@
+     options?: { allowSharing?: boolean; reason?: string },
+   ) => Promise<void>;
+   extraActions?: ReactNode;
++  collapsePlan?: boolean;
+ }) {
+   const queryClient = useQueryClient();
+   const location = useLocation();
+@@ -156,7 +158,11 @@
+   const [error, setError] = useState<string | null>(null);
+   const [draft, setDraft] = useState<DraftState | null>(null);
+   const [documentConflict, setDocumentConflict] = useState<DocumentConflictState | null>(null);
+-  const [foldedDocumentKeys, setFoldedDocumentKeys] = useState<string[]>(() => loadFoldedDocumentKeys(issue.id));
++  const [foldedDocumentKeys, setFoldedDocumentKeys] = useState<string[]>(() => {
++    const saved = loadFoldedDocumentKeys(issue.id);
++    if (collapsePlan && !saved.includes("plan")) return [...saved, "plan"];
++    return saved;
++  });
+   const [autosaveDocumentKey, setAutosaveDocumentKey] = useState<string | null>(null);
+   const [copiedDocumentKey, setCopiedDocumentKey] = useState<string | null>(null);
+   const [highlightDocumentKey, setHighlightDocumentKey] = useState<string | null>(null);
+@@ -944,6 +950,28 @@
+                 </div>
+               </div>
+ 
++              {isFolded && displayedBody ? (
++                <button
++                  type="button"
++                  className="mt-2 w-full text-left"
++                  onClick={() => setFoldedDocumentKeys((current) => current.filter((k) => k !== doc.key))}
++                >
++                  <p className="line-clamp-2 text-xs text-muted-foreground">
++                    {displayedBody
++                      .replace(/```[\s\S]*?```/g, "[code]")
++                      .replace(/`([^`]+)`/g, "$1")
++                      .replace(/!\[.*?\]\(.*?\)/g, "[image]")
++                      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
++                      .replace(/^#+\s+/gm, "")
++                      .replace(/\*\*(.+?)\*\*/g, "$1")
++                      .replace(/\*(.+?)\*/g, "$1")
++                      .replace(/^[-*>]\s+/gm, "")
++                      .replace(/\n+/g, " ")
++                      .trim()}
++                  </p>
++                </button>
++              ) : null}
++
+               {!isFolded ? (
+                 <div
+                   className="mt-3 space-y-3"
+--- /tmp/IssueDetail-old.tsx	2026-04-07 01:55:33.261727783 +0000
++++ /tmp/IssueDetail-new.tsx	2026-04-07 01:55:25.078677219 +0000
+@@ -71,16 +71,8 @@
+   SlidersHorizontal,
+   Trash2,
+ } from "lucide-react";
+-import {
+-  getClosedIsolatedExecutionWorkspaceMessage,
+-  isClosedIsolatedExecutionWorkspace,
+-  type ActivityEvent,
+-  type Agent,
+-  type FeedbackVote,
+-  type Issue,
+-  type IssueAttachment,
+-  type IssueComment,
+-} from "@paperclipai/shared";
++import type { ActivityEvent } from "@paperclipai/shared";
++import type { Agent, FeedbackVote, Issue, IssueAttachment, IssueComment } from "@paperclipai/shared";
+ 
+ type CommentReassignment = IssueCommentReassignment;
+ type IssueDetailComment = (IssueComment | OptimisticIssueComment) & {
+@@ -314,12 +306,6 @@
+     enabled: !!issueId,
+   });
+   const resolvedCompanyId = issue?.companyId ?? selectedCompanyId;
+-  const commentComposerDisabledReason = useMemo(() => {
+-    if (!issue?.currentExecutionWorkspace || !isClosedIsolatedExecutionWorkspace(issue.currentExecutionWorkspace)) {
+-      return null;
+-    }
+-    return getClosedIsolatedExecutionWorkspaceMessage(issue.currentExecutionWorkspace);
+-  }, [issue?.currentExecutionWorkspace]);
+ 
+   const { data: comments } = useQuery({
+     queryKey: queryKeys.issues.comments(issueId!),
+@@ -1377,6 +1363,7 @@
+       <IssueDocumentsSection
+         issue={issue}
+         canDeleteDocuments={Boolean(session?.user?.id)}
++        collapsePlan={threadComments.length > 5}
+         feedbackVotes={feedbackVotes}
+         feedbackDataSharingPreference={feedbackDataSharingPreference}
+         feedbackTermsUrl={FEEDBACK_TERMS_URL}
+@@ -1536,7 +1523,6 @@
+               await interruptQueuedComment.mutateAsync(runId);
+             }}
+             interruptingQueuedRunId={interruptQueuedComment.isPending ? runningIssueRun?.id ?? null : null}
+-            composerDisabledReason={commentComposerDisabledReason}
+             onVote={async (commentId, vote, options) => {
+               await feedbackVoteMutation.mutateAsync({
+                 targetType: "issue_comment",

@@ -1,0 +1,110 @@
+--- /tmp/IssueDocumentsSection-old.tsx	2026-04-07 01:55:33.258727764 +0000
++++ /tmp/IssueDocumentsSection-new.tsx	2026-04-07 01:55:25.076677207 +0000
+@@ -135,6 +135,7 @@
+   imageUploadHandler,
+   onVote,
+   extraActions,
++  collapsePlan = false,
+ }: {
+   issue: Issue;
+   canDeleteDocuments: boolean;
+@@ -149,6 +150,7 @@
+     options?: { allowSharing?: boolean; reason?: string },
+   ) => Promise<void>;
+   extraActions?: ReactNode;
++  collapsePlan?: boolean;
+ }) {
+   const queryClient = useQueryClient();
+   const location = useLocation();
+@@ -156,7 +158,11 @@
+   const [error, setError] = useState<string | null>(null);
+   const [draft, setDraft] = useState<DraftState | null>(null);
+   const [documentConflict, setDocumentConflict] = useState<DocumentConflictState | null>(null);
+-  const [foldedDocumentKeys, setFoldedDocumentKeys] = useState<string[]>(() => loadFoldedDocumentKeys(issue.id));
++  const [foldedDocumentKeys, setFoldedDocumentKeys] = useState<string[]>(() => {
++    const saved = loadFoldedDocumentKeys(issue.id);
++    if (collapsePlan && !saved.includes("plan")) return [...saved, "plan"];
++    return saved;
++  });
+   const [autosaveDocumentKey, setAutosaveDocumentKey] = useState<string | null>(null);
+   const [copiedDocumentKey, setCopiedDocumentKey] = useState<string | null>(null);
+   const [highlightDocumentKey, setHighlightDocumentKey] = useState<string | null>(null);
+@@ -944,6 +950,28 @@
+                 </div>
+               </div>
+ 
++              {isFolded && displayedBody ? (
++                <button
++                  type="button"
++                  className="mt-2 w-full text-left"
++                  onClick={() => setFoldedDocumentKeys((current) => current.filter((k) => k !== doc.key))}
++                >
++                  <p className="line-clamp-2 text-xs text-muted-foreground">
++                    {displayedBody
++                      .replace(/```[\s\S]*?```/g, "[code]")
++                      .replace(/`([^`]+)`/g, "$1")
++                      .replace(/!\[.*?\]\(.*?\)/g, "[image]")
++                      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
++                      .replace(/^#+\s+/gm, "")
++                      .replace(/\*\*(.+?)\*\*/g, "$1")
++                      .replace(/\*(.+?)\*/g, "$1")
++                      .replace(/^[-*>]\s+/gm, "")
++                      .replace(/\n+/g, " ")
++                      .trim()}
++                  </p>
++                </button>
++              ) : null}
++
+               {!isFolded ? (
+                 <div
+                   className="mt-3 space-y-3"
+--- /tmp/IssueDetail-old.tsx	2026-04-07 01:55:33.261727783 +0000
++++ /tmp/IssueDetail-new.tsx	2026-04-07 01:55:25.078677219 +0000
+@@ -71,16 +71,8 @@
+   SlidersHorizontal,
+   Trash2,
+ } from "lucide-react";
+-import {
+-  getClosedIsolatedExecutionWorkspaceMessage,
+-  isClosedIsolatedExecutionWorkspace,
+-  type ActivityEvent,
+-  type Agent,
+-  type FeedbackVote,
+-  type Issue,
+-  type IssueAttachment,
+-  type IssueComment,
+-} from "@paperclipai/shared";
++import type { ActivityEvent } from "@paperclipai/shared";
++import type { Agent, FeedbackVote, Issue, IssueAttachment, IssueComment } from "@paperclipai/shared";
+ 
+ type CommentReassignment = IssueCommentReassignment;
+ type IssueDetailComment = (IssueComment | OptimisticIssueComment) & {
+@@ -314,12 +306,6 @@
+     enabled: !!issueId,
+   });
+   const resolvedCompanyId = issue?.companyId ?? selectedCompanyId;
+-  const commentComposerDisabledReason = useMemo(() => {
+-    if (!issue?.currentExecutionWorkspace || !isClosedIsolatedExecutionWorkspace(issue.currentExecutionWorkspace)) {
+-      return null;
+-    }
+-    return getClosedIsolatedExecutionWorkspaceMessage(issue.currentExecutionWorkspace);
+-  }, [issue?.currentExecutionWorkspace]);
+ 
+   const { data: comments } = useQuery({
+     queryKey: queryKeys.issues.comments(issueId!),
+@@ -1377,6 +1363,7 @@
+       <IssueDocumentsSection
+         issue={issue}
+         canDeleteDocuments={Boolean(session?.user?.id)}
++        collapsePlan={threadComments.length > 5}
+         feedbackVotes={feedbackVotes}
+         feedbackDataSharingPreference={feedbackDataSharingPreference}
+         feedbackTermsUrl={FEEDBACK_TERMS_URL}
+@@ -1536,7 +1523,6 @@
+               await interruptQueuedComment.mutateAsync(runId);
+             }}
+             interruptingQueuedRunId={interruptQueuedComment.isPending ? runningIssueRun?.id ?? null : null}
+-            composerDisabledReason={commentComposerDisabledReason}
+             onVote={async (commentId, vote, options) => {
+               await feedbackVoteMutation.mutateAsync({
+                 targetType: "issue_comment",
