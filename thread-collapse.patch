@@ -1,0 +1,140 @@
+diff --git a/ui/src/components/CommentThread.tsx b/ui/src/components/CommentThread.tsx
+index b0b5c618..07be4f25 100644
+--- a/ui/src/components/CommentThread.tsx
++++ b/ui/src/components/CommentThread.tsx
+@@ -1,4 +1,4 @@
+-import { memo, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
++import { memo, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+ import { Link, useLocation } from "react-router-dom";
+ import type {
+   Agent,
+@@ -8,7 +8,7 @@ import type {
+   IssueComment,
+ } from "@paperclipai/shared";
+ import { Button } from "@/components/ui/button";
+-import { ArrowRight, Check, Copy, Paperclip } from "lucide-react";
++import { ArrowRight, Check, ChevronDown, Copy, Paperclip } from "lucide-react";
+ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+ import { Identity } from "./Identity";
+ import { InlineEntitySelector, type InlineEntityOption } from "./InlineEntitySelector";
+@@ -440,6 +440,65 @@ function TimelineEventCard({
+   );
+ }
+
++function stripMarkdown(text: string): string {
++  return text
++    .replace(/```[\s\S]*?```/g, "[code]")
++    .replace(/`[^`]+`/g, (m) => m.slice(1, -1))
++    .replace(/!\[.*?\]\(.*?\)/g, "[image]")
++    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
++    .replace(/^#+\s+/gm, "")
++    .replace(/\*\*(.+?)\*\*/g, "$1")
++    .replace(/\*(.+?)\*/g, "$1")
++    .replace(/_{1,2}(.+?)_{1,2}/g, "$1")
++    .replace(/~~(.+?)~~/g, "$1")
++    .replace(/^[-*>]\s+/gm, "")
++    .replace(/\n+/g, " ")
++    .trim();
++}
++
++function CollapsedCommentCard({
++  comment,
++  agentMap,
++  onClick,
++}: {
++  comment: CommentWithRunMeta;
++  agentMap?: Map<string, Agent>;
++  onClick: () => void;
++}) {
++  const authorName = comment.authorAgentId
++    ? (agentMap?.get(comment.authorAgentId)?.name ?? comment.authorAgentId.slice(0, 8))
++    : "You";
++
++  const preview = stripMarkdown(comment.body ?? "");
++  const previewText = preview.length > 120 ? preview.slice(0, 120) + "…" : preview;
++
++  return (
++    <button
++      type="button"
++      onClick={onClick}
++      className="flex w-full items-center gap-2.5 rounded-md border border-border/50 bg-muted/30 px-3 py-2 text-left transition-colors hover:bg-muted/60 hover:border-border"
++    >
++      <Avatar size="sm" className="shrink-0">
++        <AvatarFallback>{initialsForName(authorName)}</AvatarFallback>
++      </Avatar>
++      <div className="min-w-0 flex-1">
++        <div className="flex items-center gap-2">
++          <span className="text-sm font-medium text-foreground">{authorName}</span>
++          <span className="text-xs text-muted-foreground">{timeAgo(comment.createdAt)}</span>
++        </div>
++        {previewText && (
++          <p className="truncate text-xs text-muted-foreground">{previewText}</p>
++        )}
++      </div>
++      <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
++    </button>
++  );
++}
++
+ const TimelineList = memo(function TimelineList({
+   timeline,
+   agentMap,
+@@ -469,13 +528,39 @@ const TimelineList = memo(function TimelineList({
+   votingTargetId?: string | null;
+   highlightCommentId?: string | null;
+ }) {
++  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
++
++  const toggleExpand = useCallback((id: string) => {
++    setExpandedIds((prev) => {
++      const next = new Set(prev);
++      if (next.has(id)) next.delete(id);
++      else next.add(id);
++      return next;
++    });
++  }, []);
++
++  // When highlightCommentId changes, auto-expand it
++  useEffect(() => {
++    if (highlightCommentId) {
++      setExpandedIds((prev) => new Set(prev).add(highlightCommentId));
++    }
++  }, [highlightCommentId]);
++
+   if (timeline.length === 0) {
+     return <p className="text-sm text-muted-foreground">No timeline entries yet.</p>;
+   }
+
++  const commentIndices = timeline.reduce<number[]>((acc, item, i) => {
++    if (item.kind === "comment") acc.push(i);
++    return acc;
++  }, []);
++  const lastCommentIdx = commentIndices[commentIndices.length - 1] ?? -1;
++
+   return (
+     <div className="space-y-3">
+-      {timeline.map((item) => {
++      {timeline.map((item, index) => {
+         if (item.kind === "event") {
+           return (
+             <TimelineEventCard
+@@ -524,6 +609,19 @@ const TimelineList = memo(function TimelineList({
+         }
+
+         const comment = item.comment;
++        const isExpanded = index === lastCommentIdx || expandedIds.has(comment.id);
++
++        if (!isExpanded) {
++          return (
++            <CollapsedCommentCard
++              key={comment.id}
++              comment={comment}
++              agentMap={agentMap}
++              onClick={() => toggleExpand(comment.id)}
++            />
++          );
++        }
++
+         return (
+           <CommentCard
+             key={comment.id}
