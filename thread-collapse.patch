@@ -1,5 +1,5 @@
 diff --git a/ui/src/components/CommentThread.tsx b/ui/src/components/CommentThread.tsx
-index b0b5c618..07be4f25 100644
+index b0b5c618..713a9edc 100644
 --- a/ui/src/components/CommentThread.tsx
 +++ b/ui/src/components/CommentThread.tsx
 @@ -1,4 +1,4 @@
@@ -20,7 +20,7 @@ index b0b5c618..07be4f25 100644
 @@ -440,6 +440,65 @@ function TimelineEventCard({
    );
  }
-
+ 
 +function stripMarkdown(text: string): string {
 +  return text
 +    .replace(/```[\s\S]*?```/g, "[code]")
@@ -60,7 +60,11 @@ index b0b5c618..07be4f25 100644
 +      className="flex w-full items-center gap-2.5 rounded-md border border-border/50 bg-muted/30 px-3 py-2 text-left transition-colors hover:bg-muted/60 hover:border-border"
 +    >
 +      <Avatar size="sm" className="shrink-0">
-+        <AvatarFallback>{initialsForName(authorName)}</AvatarFallback>
++        {comment.authorAgentId ? (
++          <AvatarFallback>{initialsForName(authorName)}</AvatarFallback>
++        ) : (
++          <AvatarFallback>{initialsForName(authorName)}</AvatarFallback>
++        )}
 +      </Avatar>
 +      <div className="min-w-0 flex-1">
 +        <div className="flex items-center gap-2">
@@ -79,62 +83,118 @@ index b0b5c618..07be4f25 100644
  const TimelineList = memo(function TimelineList({
    timeline,
    agentMap,
-@@ -469,13 +528,39 @@ const TimelineList = memo(function TimelineList({
+@@ -469,13 +528,41 @@ const TimelineList = memo(function TimelineList({
    votingTargetId?: string | null;
    highlightCommentId?: string | null;
  }) {
-+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
++  const [showAll, setShowAll] = useState(false);
 +
-+  const toggleExpand = useCallback((id: string) => {
-+    setExpandedIds((prev) => {
-+      const next = new Set(prev);
-+      if (next.has(id)) next.delete(id);
-+      else next.add(id);
-+      return next;
-+    });
-+  }, []);
-+
-+  // When highlightCommentId changes, auto-expand it
++  // When highlightCommentId changes, show all so the target is visible
 +  useEffect(() => {
 +    if (highlightCommentId) {
-+      setExpandedIds((prev) => new Set(prev).add(highlightCommentId));
++      setShowAll(true);
 +    }
 +  }, [highlightCommentId]);
 +
    if (timeline.length === 0) {
      return <p className="text-sm text-muted-foreground">No timeline entries yet.</p>;
    }
-
+ 
++  // Indices of comment items (not events/runs)
 +  const commentIndices = timeline.reduce<number[]>((acc, item, i) => {
 +    if (item.kind === "comment") acc.push(i);
 +    return acc;
 +  }, []);
++
++  // Collapse only when there are more than 5 comments
++  const hiddenCount = !showAll && commentIndices.length > 5 ? commentIndices.length - 1 : 0;
++  // Indices of comments that are hidden (all except the last)
++  const hiddenCommentIds = hiddenCount > 0
++    ? new Set(commentIndices.slice(0, -1).map((i) => (timeline[i] as { comment: CommentWithRunMeta }).comment.id))
++    : new Set<string>();
++  // The last comment index — button appears just before it
 +  const lastCommentIdx = commentIndices[commentIndices.length - 1] ?? -1;
 +
    return (
      <div className="space-y-3">
 -      {timeline.map((item) => {
 +      {timeline.map((item, index) => {
++        // Insert "show older" button right before the last visible comment
++        const isLastComment = item.kind === "comment" && index === lastCommentIdx;
++        const showOlderButton = isLastComment && hiddenCount > 0;
++
          if (item.kind === "event") {
            return (
              <TimelineEventCard
-@@ -524,6 +609,19 @@ const TimelineList = memo(function TimelineList({
+@@ -523,21 +610,39 @@ const TimelineList = memo(function TimelineList({
+           );
          }
-
-         const comment = item.comment;
-+        const isExpanded = index === lastCommentIdx || expandedIds.has(comment.id);
-+
-+        if (!isExpanded) {
-+          return (
-+            <CollapsedCommentCard
-+              key={comment.id}
-+              comment={comment}
-+              agentMap={agentMap}
-+              onClick={() => toggleExpand(comment.id)}
-+            />
-+          );
+ 
+-        const comment = item.comment;
++        // Hidden older comment — skip entirely
++        if (hiddenCommentIds.has(item.comment.id)) {
++          return null;
 +        }
 +
          return (
-           <CommentCard
-             key={comment.id}
+-          <CommentCard
+-            key={comment.id}
+-            comment={comment}
+-            agentMap={agentMap}
+-            companyId={companyId}
+-            projectId={projectId}
+-            feedbackVote={feedbackVoteByTargetId?.get(comment.id) ?? null}
+-            feedbackDataSharingPreference={feedbackDataSharingPreference}
+-            feedbackTermsUrl={feedbackTermsUrl}
+-            onVote={onVote ? (vote, options) => onVote(comment.id, vote, options) : undefined}
+-            voting={votingTargetId === comment.id}
+-            highlightCommentId={highlightCommentId}
+-          />
++          <div key={item.comment.id}>
++            {showOlderButton && (
++              <button
++                type="button"
++                onClick={() => setShowAll(true)}
++                className="flex w-full items-center gap-2 py-1 mb-3 text-xs text-muted-foreground transition-colors hover:text-foreground"
++              >
++                <span className="h-px flex-1 bg-border" />
++                <span className="shrink-0 rounded-md border border-border bg-muted/40 px-3 py-1 hover:bg-muted/70">
++                  Show {hiddenCount} older message{hiddenCount !== 1 ? "s" : ""}
++                </span>
++                <span className="h-px flex-1 bg-border" />
++              </button>
++            )}
++            <CommentCard
++              comment={item.comment}
++              agentMap={agentMap}
++              companyId={companyId}
++              projectId={projectId}
++              feedbackVote={feedbackVoteByTargetId?.get(item.comment.id) ?? null}
++              feedbackDataSharingPreference={feedbackDataSharingPreference}
++              feedbackTermsUrl={feedbackTermsUrl}
++              onVote={onVote ? (vote, options) => onVote(item.comment.id, vote, options) : undefined}
++              voting={votingTargetId === item.comment.id}
++              highlightCommentId={highlightCommentId}
++            />
++          </div>
+         );
+       })}
+     </div>
+@@ -813,7 +918,7 @@ export function CommentThread({
+               <input
+                 ref={attachInputRef}
+                 type="file"
+-                accept="image/png,image/jpeg,image/webp,image/gif"
++                accept="image/png,image/jpeg,image/webp,image/gif,text/plain,text/markdown,application/json,text/csv,text/html,.md,.markdown"
+                 className="hidden"
+                 onChange={handleAttachFile}
+               />
+@@ -822,7 +927,7 @@ export function CommentThread({
+                 size="icon-sm"
+                 onClick={() => attachInputRef.current?.click()}
+                 disabled={attaching}
+-                title="Attach image"
++                title="Attach file"
+               >
+                 <Paperclip className="h-4 w-4" />
+               </Button>
